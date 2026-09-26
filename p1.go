@@ -49,9 +49,25 @@ type SeqConfig struct {
 
 // RunSeq trains for cfg.Steps steps and returns the final weights.
 func RunSeq(cfg SeqConfig) []float64 {
-	// Write your code here.
-	// See project1-desc.pdf, Part 1 for what this function must do.
-	panic("not implemented yet: Part 1")
+	
+	w := Init(cfg.Seed)
+	b := NewBatcher(cfg.Seed, cfg.BatchSize)
+	
+	for step := 0; step < cfg.Steps; step++{
+		batch := b.Next(step)
+		g := Grad(w, batch)
+		for i := 0; i < len(w); i++{
+			w[i] -= cfg.LR * g[i] / float64(cfg.BatchSize)
+		}
+		if cfg.OnStep != nil{
+			w_copy := make([]float64, len(w))
+			copy(w_copy, w)
+			cfg.OnStep(step, w_copy)
+		}
+	} 
+
+	return w
+
 }
 
 /* Part 2 -- Parallel local trainer (15 points). See project1-desc.pdf, Part 2. */
