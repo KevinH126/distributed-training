@@ -1,0 +1,36 @@
+# Course-provided materials
+sealed.go
+project1-desc.pdf
+p1-background.pdf
+iLab.pdf
+
+# Compiled Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test / coverage artifacts
+*.test
+*.out
+coverage.out
+
+# Build output
+/bin/
+/dist/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary / backup files
+*.tmp
+*.bak
+*~
