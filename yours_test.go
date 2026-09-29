@@ -26,13 +26,13 @@ func TestExampleSeq(t *testing.T) {
 
 // Template for Part 2. Uncomment when RunLocal works.
 //
-// func TestExampleLocal(t *testing.T) {
-// 	cfg := LocalConfig{Seed: 1, Steps: 5, BatchSize: 32, LR: 0.01, NRanks: 4}
-// 	w := RunLocal(cfg)
-// 	if len(w) != D {
-// 		t.Fatalf("RunLocal returned %d weights, want %d", len(w), D)
-// 	}
-// }
+func TestExampleLocal(t *testing.T) {
+	cfg := LocalConfig{Seed: 1, Steps: 5, BatchSize: 32, LR: 0.01, NRanks: 4}
+	w := RunLocal(cfg)
+	if len(w) != D {
+		t.Fatalf("RunLocal returned %d weights, want %d", len(w), D)
+	}
+}
 
 // Template for Part 3. Uncomment when RunWorker works. Starts one
 // worker and shuts it down.

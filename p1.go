@@ -82,13 +82,69 @@ type LocalConfig struct {
 	NRanks    int
 }
 
+type Work struct {
+	step   int
+	weights []float64
+	batch []Example
+	rank int
+	grad []float64
+	total_grad []float64
+}
+
+
+
 // RunLocal trains using NRanks goroutines and returns the final weights.
 func RunLocal(cfg LocalConfig) []float64 {
-	// Write your code here.
-	// See project1-desc.pdf, Part 2. Sum partial gradients in rank order so
-	// two runs with the same input return the same result, bit for bit.
+
+	w := Init(cfg.Seed)
+	b := NewBatcher(cfg.Seed, cfg.BatchSize)
+	chans := make([]chan Work, cfg.NRanks)
+	SliceSize := BatchSize / NRanks
+	
+
+	for rank := 0; rank < cfg.NRanks; rank++ {
+		chans[rank] := make(chan Work)
+		go func(ch chan) {
+			while True{
+				work := <-ch
+
+				g := Grad(work.weights, work.batch)
+				work.grad = g
+				if work.rank == 0 {
+					total_grad = g
+					for i := 1; i < cfg.NRanks; i++{
+						work_i <- chans[i]
+						for j := 0; j < 16; j++{
+							total_grad[j] += work_i.grad[j]
+						}
+					}
+
+				} else {
+					ch <- work
+					work := <-ch
+					for i := 0; i < len(work.weights); i++{
+						work.grad[i] = work.total_grad[i] / cfg.NRanks
+						work.weights[i] -= cfg.LR * total_grad[i] / float64(SliceSize)
+					}
+				}
+				if work.step == cfg.Steps {
+					break
+				}
+			}
+			
+		}(chans[rank])
+	}
+
+	for step := 0; step < cfg.Steps; step++ {
+		batch := b.Next(step)
+
+		
+	}
+
 	panic("not implemented yet: Part 2")
 }
+
+
 
 /* Part 3 -- Coordinator and workers over RPC (65 points). */
 
