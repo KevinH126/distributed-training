@@ -49,22 +49,22 @@ type SeqConfig struct {
 
 // RunSeq trains for cfg.Steps steps and returns the final weights.
 func RunSeq(cfg SeqConfig) []float64 {
-	
+
 	w := Init(cfg.Seed)
 	b := NewBatcher(cfg.Seed, cfg.BatchSize)
-	
-	for step := 0; step < cfg.Steps; step++{
+
+	for step := 0; step < cfg.Steps; step++ {
 		batch := b.Next(step)
 		g := Grad(w, batch)
-		for i := 0; i < len(w); i++{
+		for i := 0; i < len(w); i++ {
 			w[i] -= cfg.LR * g[i] / float64(cfg.BatchSize)
 		}
-		if cfg.OnStep != nil{
+		if cfg.OnStep != nil {
 			w_copy := make([]float64, len(w))
 			copy(w_copy, w)
 			cfg.OnStep(step, w_copy)
 		}
-	} 
+	}
 
 	return w
 
@@ -83,15 +83,13 @@ type LocalConfig struct {
 }
 
 type Work struct {
-	step   int
-	weights []float64
-	batch []Example
-	rank int
-	grad []float64
+	step       int
+	weights    []float64
+	batch      []Example
+	rank       int
+	grad       []float64
 	total_grad []float64
 }
-
-
 
 // RunLocal trains using NRanks goroutines and returns the final weights.
 func RunLocal(cfg LocalConfig) []float64 {
@@ -99,52 +97,64 @@ func RunLocal(cfg LocalConfig) []float64 {
 	w := Init(cfg.Seed)
 	b := NewBatcher(cfg.Seed, cfg.BatchSize)
 	chans := make([]chan Work, cfg.NRanks)
-	SliceSize := BatchSize / NRanks
-	
+	SliceSize := cfg.BatchSize / cfg.NRanks
 
 	for rank := 0; rank < cfg.NRanks; rank++ {
-		chans[rank] := make(chan Work)
-		go func(ch chan) {
-			while True{
+		chans[rank] = make(chan Work)
+		go func(ch chan Work) {
+			for true {
 				work := <-ch
 
 				g := Grad(work.weights, work.batch)
 				work.grad = g
 				if work.rank == 0 {
-					total_grad = g
-					for i := 1; i < cfg.NRanks; i++{
-						work_i <- chans[i]
-						for j := 0; j < 16; j++{
-							total_grad[j] += work_i.grad[j]
+					for i := 1; i < cfg.NRanks; i++ {
+						work_i := <-chans[i]
+						for j := 0; j < 16; j++ {
+							work.grad[j] += work_i.grad[j]
 						}
 					}
-
+					for i := 1; i < cfg.NRanks; i++ {
+						chans[i] <- work
+					}
 				} else {
 					ch <- work
-					work := <-ch
-					for i := 0; i < len(work.weights); i++{
-						work.grad[i] = work.total_grad[i] / cfg.NRanks
-						work.weights[i] -= cfg.LR * total_grad[i] / float64(SliceSize)
-					}
+					work = <-ch
 				}
-				if work.step == cfg.Steps {
+
+				for i := 0; i < len(work.weights); i++ {
+					work.grad[i] /= float64(cfg.NRanks)
+					work.weights[i] -= cfg.LR * work.grad[i] / float64(SliceSize)
+				}
+				ch <- work
+
+				if work.step == cfg.Steps-1 {
 					break
 				}
 			}
-			
+
 		}(chans[rank])
 	}
 
+	var res Work
 	for step := 0; step < cfg.Steps; step++ {
 		batch := b.Next(step)
+		for r := 0; r < cfg.NRanks; r++ {
+			var work Work
+			work.step = step
+			work.batch = batch[(r * SliceSize):((r + 1) * SliceSize)]
+			rankW := make([]float64, len(w))
+			copy(rankW, w)
+			work.weights = rankW
+			work.rank = r
 
-		
+			chans[r] <- work
+		}
+		res = <-chans[0]
+		w = res.weights
 	}
-
-	panic("not implemented yet: Part 2")
+	return res.grad
 }
-
-
 
 /* Part 3 -- Coordinator and workers over RPC (65 points). */
 
