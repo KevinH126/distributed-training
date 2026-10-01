@@ -83,77 +83,82 @@ type LocalConfig struct {
 }
 
 type Work struct {
-	step       int
-	weights    []float64
-	batch      []Example
-	rank       int
-	grad       []float64
-	total_grad []float64
+	Step  int
+	Slice []Example
+}
+
+type GradMsg struct {
+	Rank int
+	Grad []float64
 }
 
 // RunLocal trains using NRanks goroutines and returns the final weights.
 func RunLocal(cfg LocalConfig) []float64 {
 
 	w := Init(cfg.Seed)
+	if cfg.Steps == 0 {
+		return w
+	}
 	b := NewBatcher(cfg.Seed, cfg.BatchSize)
-	chans := make([]chan Work, cfg.NRanks)
+	work_chans := make([]chan Work, cfg.NRanks)
+	grad_chans := make([]chan GradMsg, cfg.NRanks)
+	finalWeights := make(chan []float64)
 	SliceSize := cfg.BatchSize / cfg.NRanks
 
 	for rank := 0; rank < cfg.NRanks; rank++ {
-		chans[rank] = make(chan Work)
-		go func(ch chan Work) {
-			for true {
-				work := <-ch
+		work_chans[rank] = make(chan Work)
+		grad_chans[rank] = make(chan GradMsg)
+		rankW := make([]float64, len(w))
+		copy(rankW, w)
 
-				g := Grad(work.weights, work.batch)
-				work.grad = g
-				if work.rank == 0 {
+		go func(r int, weights []float64) {
+			for true {
+				work := <-work_chans[r]
+
+				g := Grad(weights, work.Slice)
+
+				if r == 0 {
 					for i := 1; i < cfg.NRanks; i++ {
-						work_i := <-chans[i]
-						for j := 0; j < 16; j++ {
-							work.grad[j] += work_i.grad[j]
+						grad_i := <-grad_chans[i]
+						for j := range 16 {
+							g[j] += grad_i.Grad[j]
 						}
 					}
 					for i := 1; i < cfg.NRanks; i++ {
-						chans[i] <- work
+						gCopy := make([]float64, len(g))
+						copy(gCopy, g)
+						grad_chans[i] <- GradMsg{Rank: i, Grad: gCopy}
 					}
 				} else {
-					ch <- work
-					work = <-ch
+					grad_chans[r] <- GradMsg{Rank: r, Grad: g}
+					grad_msg := <-grad_chans[r]
+					g = grad_msg.Grad
 				}
 
-				for i := 0; i < len(work.weights); i++ {
-					work.grad[i] /= float64(cfg.NRanks)
-					work.weights[i] -= cfg.LR * work.grad[i] / float64(SliceSize)
+				for i := range weights {
+					weights[i] -= cfg.LR * g[i] / float64(cfg.BatchSize)
 				}
-				ch <- work
 
-				if work.step == cfg.Steps-1 {
+				if work.Step == cfg.Steps-1 {
+					if r == 0 {
+						wCopy := make([]float64, len(weights))
+						copy(wCopy, weights)
+						finalWeights <- wCopy
+					}
 					break
 				}
 			}
-
-		}(chans[rank])
+		}(rank, rankW)
 	}
 
-	var res Work
-	for step := 0; step < cfg.Steps; step++ {
+	for step := range cfg.Steps {
 		batch := b.Next(step)
-		for r := 0; r < cfg.NRanks; r++ {
-			var work Work
-			work.step = step
-			work.batch = batch[(r * SliceSize):((r + 1) * SliceSize)]
-			rankW := make([]float64, len(w))
-			copy(rankW, w)
-			work.weights = rankW
-			work.rank = r
-
-			chans[r] <- work
+		for r := range cfg.NRanks {
+			slice := batch[r*SliceSize : ((r + 1) * SliceSize)]
+			work_chans[r] <- Work{Step: step, Slice: slice}
 		}
-		res = <-chans[0]
-		w = res.weights
 	}
-	return res.grad
+	return <-finalWeights
 }
 
 /* Part 3 -- Coordinator and workers over RPC (65 points). */
