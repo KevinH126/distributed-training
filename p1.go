@@ -86,11 +86,6 @@ type LocalConfig struct {
 	NRanks    int
 }
 
-type Work struct {
-	Step  int
-	Slice []Example
-}
-
 // RunLocal trains using NRanks goroutines and returns the final weights.
 func RunLocal(cfg LocalConfig) []float64 {
 
@@ -99,22 +94,22 @@ func RunLocal(cfg LocalConfig) []float64 {
 		return w
 	}
 	b := NewBatcher(cfg.Seed, cfg.BatchSize)
-	work_chans := make([]chan Work, cfg.NRanks)
+	work_chans := make([]chan []Example, cfg.NRanks)
 	grad_chans := make([]chan []float64, cfg.NRanks)
 	finalWeights := make(chan []float64)
 	SliceSize := cfg.BatchSize / cfg.NRanks
 
 	for rank := 0; rank < cfg.NRanks; rank++ {
-		work_chans[rank] = make(chan Work)
+		work_chans[rank] = make(chan []Example)
 		grad_chans[rank] = make(chan []float64)
 		rankW := make([]float64, len(w))
 		copy(rankW, w)
 
 		go func(r int, weights []float64) {
-			for true {
-				work := <-work_chans[r]
+			for s := range cfg.Steps {
+				slice := <-work_chans[r]
 
-				g := Grad(weights, work.Slice)
+				g := Grad(weights, slice)
 
 				if r == 0 {
 					for i := 1; i < cfg.NRanks; i++ {
@@ -137,14 +132,10 @@ func RunLocal(cfg LocalConfig) []float64 {
 				for i := range weights {
 					weights[i] -= cfg.LR * g[i] / float64(cfg.BatchSize)
 				}
-
-				if work.Step == cfg.Steps-1 {
-					if r == 0 {
-						wCopy := make([]float64, len(weights))
-						copy(wCopy, weights)
-						finalWeights <- wCopy
-					}
-					break
+				if s == cfg.Steps-1 && r == 0 {
+					wCopy := make([]float64, len(weights))
+					copy(wCopy, weights)
+					finalWeights <- wCopy
 				}
 			}
 		}(rank, rankW)
@@ -154,7 +145,7 @@ func RunLocal(cfg LocalConfig) []float64 {
 		batch := b.Next(step)
 		for r := range cfg.NRanks {
 			slice := batch[r*SliceSize : ((r + 1) * SliceSize)]
-			work_chans[r] <- Work{Step: step, Slice: slice}
+			work_chans[r] <- slice
 		}
 	}
 	return <-finalWeights
