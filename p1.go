@@ -20,12 +20,16 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/rpc"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	// You will need more packages as you go. Add them here when you need
@@ -87,11 +91,6 @@ type Work struct {
 	Slice []Example
 }
 
-type GradMsg struct {
-	Rank int
-	Grad []float64
-}
-
 // RunLocal trains using NRanks goroutines and returns the final weights.
 func RunLocal(cfg LocalConfig) []float64 {
 
@@ -101,13 +100,13 @@ func RunLocal(cfg LocalConfig) []float64 {
 	}
 	b := NewBatcher(cfg.Seed, cfg.BatchSize)
 	work_chans := make([]chan Work, cfg.NRanks)
-	grad_chans := make([]chan GradMsg, cfg.NRanks)
+	grad_chans := make([]chan []float64, cfg.NRanks)
 	finalWeights := make(chan []float64)
 	SliceSize := cfg.BatchSize / cfg.NRanks
 
 	for rank := 0; rank < cfg.NRanks; rank++ {
 		work_chans[rank] = make(chan Work)
-		grad_chans[rank] = make(chan GradMsg)
+		grad_chans[rank] = make(chan []float64)
 		rankW := make([]float64, len(w))
 		copy(rankW, w)
 
@@ -121,18 +120,18 @@ func RunLocal(cfg LocalConfig) []float64 {
 					for i := 1; i < cfg.NRanks; i++ {
 						grad_i := <-grad_chans[i]
 						for j := range 16 {
-							g[j] += grad_i.Grad[j]
+							g[j] += grad_i[j]
 						}
 					}
 					for i := 1; i < cfg.NRanks; i++ {
 						gCopy := make([]float64, len(g))
 						copy(gCopy, g)
-						grad_chans[i] <- GradMsg{Rank: i, Grad: gCopy}
+						grad_chans[i] <- gCopy
 					}
 				} else {
-					grad_chans[r] <- GradMsg{Rank: r, Grad: g}
+					grad_chans[r] <- g
 					grad_msg := <-grad_chans[r]
-					g = grad_msg.Grad
+					g = grad_msg
 				}
 
 				for i := range weights {
@@ -169,9 +168,15 @@ type Worker struct{}
 
 // Grad returns the summed gradient for one slice of a batch.
 func (Worker) Grad(args GradArgs, reply *GradReply) error {
-	// Write your code here.
-	// See project1-desc.pdf, Part 3.1.
-	panic("not implemented yet: Part 3.1 (Worker.Grad)")
+	if len(args.W) != D {
+		return errors.New("len(w) != 16")
+	}
+	if len(args.Batch) == 0 {
+		return errors.New("len(batch) == 0")
+	}
+
+	reply.Grad = Grad(args.W, args.Batch)
+	return nil
 }
 
 // Ping is a health check. Leave it as it is.
@@ -183,9 +188,32 @@ func (Worker) Ping(_ PingArgs, reply *PingReply) error {
 // RunWorker starts a worker on addr and returns its actual address
 // plus a stop function that shuts it down.
 func RunWorker(addr string) (actualAddr string, stop func(), err error) {
-	// Write your code here.
-	// See project1-desc.pdf, Part 3.1.
-	panic("not implemented yet: Part 3.1 (RunWorker)")
+	server := rpc.NewServer()
+	worker := &Worker{}
+	server.Register(worker)
+
+	listener, err := net.Listen("tcp", addr)
+
+	if err != nil {
+		return "", nil, errors.New("Failed to initialize listener")
+	}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+
+			go server.ServeConn(conn)
+		}
+	}()
+	var once sync.Once
+	stop_func := func() {
+		once.Do(func() {
+			listener.Close()
+		})
+	}
+	return listener.Addr().String(), stop_func, nil
 }
 
 // DistConfig holds the inputs to RunCoordinator. Do not add or remove
